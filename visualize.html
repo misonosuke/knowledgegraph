@@ -1,0 +1,263 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>OAヘルプ業務 ナレッジグラフ可視化</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/d3/7.8.5/d3.min.js"></script>
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: #f5f5f3; color: #1a1a18; padding: 24px; }
+h1 { font-size: 16px; font-weight: 500; margin-bottom: 4px; }
+.subtitle { font-size: 12px; color: #888; margin-bottom: 16px; }
+.legend { display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 12px; }
+.legend-item { display: flex; align-items: center; gap: 6px; font-size: 12px; color: #555; }
+.legend-dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
+.legend-line { width: 24px; height: 2px; flex-shrink: 0; }
+#controls { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; }
+.filter-btn { font-size: 12px; padding: 4px 10px; border-radius: 20px; border: 1px solid #ccc; background: #fff; color: #555; cursor: pointer; transition: all 0.15s; }
+.filter-btn.active { background: #1a1a18; color: #fff; border-color: #1a1a18; font-weight: 500; }
+.filter-btn:hover:not(.active) { background: #f0f0ee; }
+#kg-canvas { width: 100%; height: 560px; border: 1px solid #e0e0dc; border-radius: 12px; background: #fff; overflow: hidden; }
+#detail-panel { margin-top: 12px; min-height: 72px; background: #fff; border: 1px solid #e0e0dc; border-radius: 12px; padding: 14px 18px; font-size: 13px; color: #888; }
+.dp-title { font-size: 15px; font-weight: 500; color: #1a1a18; margin-bottom: 4px; }
+.dp-type { font-size: 11px; padding: 2px 8px; border-radius: 20px; display: inline-block; margin-bottom: 10px; font-weight: 500; }
+.dp-props { display: grid; grid-template-columns: auto 1fr; gap: 3px 16px; }
+.dp-key { color: #aaa; }
+.dp-val { color: #333; }
+.edge-legend { margin-top: 12px; }
+.edge-legend-title { font-size: 12px; color: #888; margin-bottom: 6px; }
+.edge-legend-grid { display: flex; gap: 10px; flex-wrap: wrap; }
+</style>
+</head>
+<body>
+
+<h1>OAヘルプ業務 ナレッジグラフ</h1>
+<p class="subtitle">ノードをクリックで詳細表示 / ドラッグで移動 / フィルターで絞り込み</p>
+
+<div class="legend">
+  <div class="legend-item"><div class="legend-dot" style="background:#1D9E75"></div>Entity（発話概念）</div>
+  <div class="legend-item"><div class="legend-dot" style="background:#534AB7"></div>Intent（意図）</div>
+  <div class="legend-item"><div class="legend-dot" style="background:#185FA5"></div>Operation（実行単位）</div>
+  <div class="legend-item"><div class="legend-dot" style="background:#BA7517"></div>Condition（条件）</div>
+  <div class="legend-item"><div class="legend-dot" style="background:#EF9F27"></div>Procedure（手順）</div>
+  <div class="legend-item"><div class="legend-dot" style="background:#D85A30"></div>EscalationReason（引継理由）</div>
+</div>
+
+<div id="controls">
+  <button class="filter-btn active" data-type="all">すべて</button>
+  <button class="filter-btn" data-type="Entity">Entity</button>
+  <button class="filter-btn" data-type="Intent">Intent</button>
+  <button class="filter-btn" data-type="Operation">Operation</button>
+  <button class="filter-btn" data-type="Condition">Condition</button>
+  <button class="filter-btn" data-type="Procedure">Procedure</button>
+  <button class="filter-btn" data-type="EscalationReason">Escalation</button>
+</div>
+
+<div id="kg-canvas"></div>
+
+<div id="detail-panel">ノードをクリックするとプロパティが表示されます</div>
+
+<div class="edge-legend">
+  <div class="edge-legend-title">エッジの種類</div>
+  <div class="edge-legend-grid">
+    <div class="legend-item"><div class="legend-line" style="background:#1D9E75"></div>triggers</div>
+    <div class="legend-item"><div class="legend-line" style="background:#534AB7"></div>routes_to</div>
+    <div class="legend-item"><div class="legend-line" style="background:#185FA5"></div>requires</div>
+    <div class="legend-item"><div class="legend-line" style="background:#BA7517"></div>proceeds_when</div>
+    <div class="legend-item"><div class="legend-line" style="background:#EF9F27"></div>follows</div>
+    <div class="legend-item"><div class="legend-line" style="background:#D85A30"></div>escalates_when</div>
+    <div class="legend-item"><div class="legend-line" style="background:#888"></div>answered_by</div>
+  </div>
+</div>
+
+<script>
+const COLOR = {
+  Entity: "#1D9E75", Intent: "#534AB7", Operation: "#185FA5",
+  Condition: "#BA7517", Procedure: "#EF9F27", EscalationReason: "#D85A30"
+};
+const EDGE_COLOR = {
+  triggers: "#1D9E75", routes_to: "#534AB7", requires: "#185FA5",
+  proceeds_when: "#BA7517", follows: "#EF9F27", escalates_when: "#D85A30", answered_by: "#888780"
+};
+const RADIUS = { Entity: 22, Intent: 26, Operation: 28, Condition: 24, Procedure: 22, EscalationReason: 22 };
+
+const NODES = [
+  { id: "e_password", type: "Entity", label: "パスワード", props: { synonyms: ["PW","パスワ","passward","pass"], language: "ja" } },
+  { id: "e_login", type: "Entity", label: "ログイン・認証", props: { synonyms: ["ログイン","サインイン","認証","login"], language: "ja" } },
+  { id: "e_error", type: "Entity", label: "エラー・不具合", props: { synonyms: ["エラー","不具合","動かない","おかしい"], language: "ja" } },
+  { id: "e_howto", type: "Entity", label: "使い方・機能", props: { synonyms: ["使い方","操作方法","機能","やり方"], language: "ja" } },
+  { id: "i_pw_reset", type: "Intent", label: "PW_RESET_INTENT", props: { description: "パスワードをリセットしたい", confidence_min: 0.8, is_fallback: false } },
+  { id: "i_inquiry", type: "Intent", label: "INQUIRY_INTENT", props: { description: "OA操作・機能について知りたい", confidence_min: 0.75, is_fallback: false } },
+  { id: "i_unknown", type: "Intent", label: "UNKNOWN_INTENT", props: { description: "いずれのIntentにも該当しない発話", confidence_min: null, is_fallback: true } },
+  { id: "op_pw_reset", type: "Operation", label: "PASSWORD_RESET_OP", props: { op_type: "deterministic", is_active: true } },
+  { id: "op_inquiry", type: "Operation", label: "KNOWLEDGE_INQUIRY_OP", props: { op_type: "generative", is_active: true } },
+  { id: "op_handoff", type: "Operation", label: "HUMAN_HANDOFF_OP", props: { op_type: "deterministic", is_active: true } },
+  { id: "c_identity", type: "Condition", label: "本人確認条件", props: { condition_type: "binary", rule: "identity_match", threshold: null } },
+  { id: "c_confidence", type: "Condition", label: "確信度条件", props: { condition_type: "threshold", metric: "rag_score", threshold: 0.75 } },
+  { id: "p_identity", type: "Procedure", label: "本人確認手順", props: { exec_type: "rule_based", content: "社員番号と氏名の一致を確認する" } },
+  { id: "p_pw_send", type: "Procedure", label: "PW送信手順", props: { exec_type: "api_call", content: "登録済み携帯番号にSMSでリセットURLを送信する" } },
+  { id: "p_faq", type: "Procedure", label: "FAQ検索手順", props: { exec_type: "rag", content: "発話をクエリとしてRAGで関連FAQ・手順を検索する" } },
+  { id: "p_answer", type: "Procedure", label: "回答生成手順", props: { exec_type: "rag", content: "RAG検索結果をもとにLLMが回答テキストを生成する" } },
+  { id: "esc_identity", type: "EscalationReason", label: "本人確認失敗", props: { reason_type: "rule_violation", occurrence_count: 0 } },
+  { id: "esc_confidence", type: "EscalationReason", label: "低確信度", props: { reason_type: "low_confidence", occurrence_count: 0 } },
+  { id: "esc_scope", type: "EscalationReason", label: "スコープ外", props: { reason_type: "out_of_scope", occurrence_count: 0 } },
+  { id: "esc_user", type: "EscalationReason", label: "ユーザー要求", props: { reason_type: "user_request", occurrence_count: 0 } }
+];
+
+const LINKS = [
+  { source: "e_password", target: "i_pw_reset", label: "triggers" },
+  { source: "e_password", target: "i_inquiry", label: "triggers" },
+  { source: "e_login", target: "i_pw_reset", label: "triggers" },
+  { source: "e_login", target: "i_inquiry", label: "triggers" },
+  { source: "e_error", target: "i_inquiry", label: "triggers" },
+  { source: "e_howto", target: "i_inquiry", label: "triggers" },
+  { source: "i_pw_reset", target: "op_pw_reset", label: "routes_to" },
+  { source: "i_inquiry", target: "op_inquiry", label: "routes_to" },
+  { source: "i_unknown", target: "op_handoff", label: "routes_to" },
+  { source: "i_inquiry", target: "p_faq", label: "answered_by" },
+  { source: "op_pw_reset", target: "c_identity", label: "requires" },
+  { source: "op_inquiry", target: "c_confidence", label: "requires" },
+  { source: "c_identity", target: "p_identity", label: "proceeds_when" },
+  { source: "c_confidence", target: "p_faq", label: "proceeds_when" },
+  { source: "p_identity", target: "p_pw_send", label: "follows" },
+  { source: "p_faq", target: "p_answer", label: "follows" },
+  { source: "c_identity", target: "esc_identity", label: "escalates_when" },
+  { source: "c_confidence", target: "esc_confidence", label: "escalates_when" },
+  { source: "op_handoff", target: "esc_scope", label: "requires" },
+  { source: "op_handoff", target: "esc_user", label: "requires" }
+];
+
+let activeType = "all";
+let simulation, svg, linkG, nodeG, labelG;
+
+function init() {
+  const el = document.getElementById("kg-canvas");
+  const W = el.clientWidth || 800;
+  const H = 560;
+
+  svg = d3.select("#kg-canvas").append("svg")
+    .attr("width", "100%").attr("height", H)
+    .attr("viewBox", `0 0 ${W} ${H}`);
+
+  svg.append("defs").selectAll("marker")
+    .data(Object.keys(EDGE_COLOR))
+    .join("marker")
+    .attr("id", d => "arrow-" + d)
+    .attr("viewBox", "0 0 10 10").attr("refX", 10).attr("refY", 5)
+    .attr("markerWidth", 5).attr("markerHeight", 5)
+    .attr("orient", "auto-start-reverse")
+    .append("path").attr("d", "M0,1 L9,5 L0,9 Z")
+    .attr("fill", d => EDGE_COLOR[d]).attr("opacity", 0.8);
+
+  linkG = svg.append("g");
+  nodeG = svg.append("g");
+  labelG = svg.append("g");
+
+  simulation = d3.forceSimulation(NODES)
+    .force("link", d3.forceLink(LINKS).id(d => d.id).distance(d => {
+      const t = [d.source.type || "", d.target.type || ""];
+      if (t.includes("Entity") && t.includes("Intent")) return 100;
+      if (t.includes("Intent") && t.includes("Operation")) return 105;
+      if (t.includes("Operation") && t.includes("Condition")) return 90;
+      return 85;
+    }).strength(0.5))
+    .force("charge", d3.forceManyBody().strength(-350))
+    .force("center", d3.forceCenter(W / 2, H / 2))
+    .force("collision", d3.forceCollide().radius(d => RADIUS[d.type] + 14))
+    .on("tick", ticked);
+
+  render();
+
+  document.querySelectorAll(".filter-btn").forEach(btn => {
+    btn.addEventListener("click", function() {
+      document.querySelectorAll(".filter-btn").forEach(b => b.classList.remove("active"));
+      this.classList.add("active");
+      activeType = this.dataset.type;
+      render();
+      simulation.alpha(0.3).restart();
+    });
+  });
+}
+
+function getVisible() {
+  if (activeType === "all") return { nodes: NODES, links: LINKS };
+  const visIds = new Set(NODES.filter(n => n.type === activeType).map(n => n.id));
+  const visLinks = LINKS.filter(l => {
+    const sid = typeof l.source === "object" ? l.source.id : l.source;
+    const tid = typeof l.target === "object" ? l.target.id : l.target;
+    return visIds.has(sid) || visIds.has(tid);
+  });
+  visLinks.forEach(l => {
+    const sid = typeof l.source === "object" ? l.source.id : l.source;
+    const tid = typeof l.target === "object" ? l.target.id : l.target;
+    visIds.add(sid); visIds.add(tid);
+  });
+  return { nodes: NODES.filter(n => visIds.has(n.id)), links: visLinks };
+}
+
+function render() {
+  const { nodes, links } = getVisible();
+  simulation.nodes(NODES);
+  simulation.force("link").links(LINKS);
+
+  const link = linkG.selectAll("line").data(links, d => {
+    const s = typeof d.source === "object" ? d.source.id : d.source;
+    const t = typeof d.target === "object" ? d.target.id : d.target;
+    return s + "_" + t + "_" + d.label;
+  });
+  link.enter().append("line")
+    .attr("stroke", d => EDGE_COLOR[d.label] || "#888")
+    .attr("stroke-width", 1.2).attr("opacity", 0.5)
+    .attr("marker-end", d => `url(#arrow-${d.label})`);
+  link.exit().remove();
+
+  const node = nodeG.selectAll("circle").data(nodes, d => d.id);
+  node.enter().append("circle")
+    .attr("r", d => RADIUS[d.type])
+    .attr("fill", d => COLOR[d.type])
+    .attr("opacity", 0.9)
+    .attr("stroke", "#fff").attr("stroke-width", 2)
+    .style("cursor", "pointer")
+    .on("click", (e, d) => showDetail(d))
+    .call(d3.drag()
+      .on("start", (e, d) => { if (!e.active) simulation.alphaTarget(0.3).restart(); d.fx = d.x; d.fy = d.y; })
+      .on("drag", (e, d) => { d.fx = e.x; d.fy = e.y; })
+      .on("end", (e, d) => { if (!e.active) simulation.alphaTarget(0); d.fx = null; d.fy = null; }));
+  node.exit().remove();
+
+  const label = labelG.selectAll("text").data(nodes, d => d.id);
+  label.enter().append("text")
+    .attr("text-anchor", "middle").attr("dominant-baseline", "central")
+    .attr("font-size", d => d.type === "Operation" ? 7.5 : 8.5)
+    .attr("fill", "#fff").attr("font-weight", "500")
+    .attr("pointer-events", "none")
+    .text(d => d.label.length > 10 ? d.label.slice(0, 9) + "…" : d.label);
+  label.exit().remove();
+}
+
+function ticked() {
+  linkG.selectAll("line")
+    .attr("x1", d => d.source.x).attr("y1", d => d.source.y)
+    .attr("x2", d => { const dx = d.target.x - d.source.x, dy = d.target.y - d.source.y, dist = Math.sqrt(dx*dx+dy*dy)||1, r = RADIUS[d.target.type]+2; return d.target.x - dx/dist*r; })
+    .attr("y2", d => { const dx = d.target.x - d.source.x, dy = d.target.y - d.source.y, dist = Math.sqrt(dx*dx+dy*dy)||1, r = RADIUS[d.target.type]+2; return d.target.y - dy/dist*r; });
+  nodeG.selectAll("circle").attr("cx", d => d.x).attr("cy", d => d.y);
+  labelG.selectAll("text").attr("x", d => d.x).attr("y", d => d.y);
+}
+
+function showDetail(d) {
+  const color = COLOR[d.type];
+  const props = Object.entries(d.props || {}).map(([k, v]) =>
+    `<div class="dp-key">${k}</div><div class="dp-val">${Array.isArray(v) ? v.join(", ") : v === null ? "null" : String(v)}</div>`
+  ).join("");
+  document.getElementById("detail-panel").innerHTML = `
+    <div class="dp-title">${d.label}</div>
+    <span class="dp-type" style="background:${color}22;color:${color}">${d.type}</span>
+    <div class="dp-props">${props}</div>
+  `;
+}
+
+init();
+</script>
+</body>
+</html>
